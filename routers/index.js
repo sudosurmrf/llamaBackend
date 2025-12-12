@@ -1,5 +1,7 @@
 import express from 'express';
 import authRouter from './auth.js';
+import customersRouter from './customers.js';
+import ordersRouter from './orders.js';
 import productsRouter from './products.js';
 import categoriesRouter from './categories.js';
 import specialsRouter from './specials.js';
@@ -11,8 +13,14 @@ import checkoutRouter from './checkout.js';
 
 const router = express.Router();
 
-// Auth routes
+// Auth routes (admin/staff)
 router.use('/auth', authRouter);
+
+// Customer routes (public registration/login)
+router.use('/customers', customersRouter);
+
+// Orders routes
+router.use('/orders', ordersRouter);
 
 // Resource routes
 router.use('/products', productsRouter);

@@ -130,6 +130,59 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 
 -- =====================================================
+-- CUSTOMERS TABLE (Customer accounts for website users)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS customers (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
+    phone VARCHAR(20),
+    active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =====================================================
+-- ORDERS TABLE (Customer orders)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS orders (
+    id SERIAL PRIMARY KEY,
+    customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+    order_number VARCHAR(50) UNIQUE NOT NULL,
+    status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled')),
+    subtotal DECIMAL(10, 2) NOT NULL,
+    tax DECIMAL(10, 2) NOT NULL,
+    total DECIMAL(10, 2) NOT NULL,
+    fulfillment_type VARCHAR(20) DEFAULT 'pickup' CHECK (fulfillment_type IN ('pickup', 'delivery')),
+    pickup_time TIMESTAMP WITH TIME ZONE,
+    delivery_address JSONB, -- { street, city, state, zip }
+    customer_name VARCHAR(255),
+    customer_email VARCHAR(255),
+    customer_phone VARCHAR(20),
+    notes TEXT,
+    stripe_session_id VARCHAR(255),
+    stripe_payment_intent VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =====================================================
+-- ORDER_ITEMS TABLE (Items within an order)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS order_items (
+    id SERIAL PRIMARY KEY,
+    order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
+    product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+    product_name VARCHAR(255) NOT NULL,
+    quantity INTEGER NOT NULL,
+    unit_price DECIMAL(10, 2) NOT NULL,
+    total_price DECIMAL(10, 2) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- =====================================================
 -- INDEXES for better query performance
 -- =====================================================
 CREATE INDEX IF NOT EXISTS idx_products_category ON products(category_id);
@@ -151,6 +204,16 @@ CREATE INDEX IF NOT EXISTS idx_promotions_location ON promotions(display_locatio
 
 CREATE INDEX IF NOT EXISTS idx_banners_active ON banners(active);
 CREATE INDEX IF NOT EXISTS idx_banners_dates ON banners(start_date, end_date);
+
+CREATE INDEX IF NOT EXISTS idx_customers_email ON customers(email);
+CREATE INDEX IF NOT EXISTS idx_customers_active ON customers(active);
+
+CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_number ON orders(order_number);
+CREATE INDEX IF NOT EXISTS idx_orders_stripe_session ON orders(stripe_session_id);
+
+CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
 
 -- =====================================================
 -- TRIGGER: Auto-update updated_at timestamp
@@ -181,6 +244,12 @@ CREATE TRIGGER update_promotions_updated_at BEFORE UPDATE ON promotions FOR EACH
 
 DROP TRIGGER IF EXISTS update_banners_updated_at ON banners;
 CREATE TRIGGER update_banners_updated_at BEFORE UPDATE ON banners FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_customers_updated_at ON customers;
+CREATE TRIGGER update_customers_updated_at BEFORE UPDATE ON customers FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_orders_updated_at ON orders;
+CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- =====================================================
 -- SEED DATA: Default admin user (password: admin123)
