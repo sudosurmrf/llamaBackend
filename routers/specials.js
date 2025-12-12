@@ -170,31 +170,89 @@ router.post('/validate-code', asyncHandler(async (req, res) => {
       break;
 
     case 'buy_x_get_y':
-      const buyQty = special.value?.buy_quantity || special.value?.buyQuantity || 2;
+      const buyQty = special.value?.buy_quantity || special.value?.buyQuantity || 1;
       const getQty = special.value?.get_quantity || special.value?.getQuantity || 1;
 
-      // Find qualifying items in cart
-      let qualifyingCartItems = [];
+      // Get buy and get category/product IDs from the value object
+      const buyCategoryIds = special.value?.buy_category_ids || special.value?.buyCategoryIds || [];
+      const buyProductIds = special.value?.buy_product_ids || special.value?.buyProductIds || [];
+      const getCategoryIds = special.value?.get_category_ids || special.value?.getCategoryIds || [];
+      const getProductIds = special.value?.get_product_ids || special.value?.getProductIds || [];
+
+      // Selected free items from frontend (user's choices)
+      const selectedFreeItems = req.body.selectedFreeItems || [];
+
+      // Get products for the "buy" condition
+      let buyProducts = [];
+      if (buyProductIds.length > 0) {
+        const result = await query(
+          'SELECT id, name, price, images, category_id FROM products WHERE id = ANY($1) AND active = true',
+          [buyProductIds]
+        );
+        buyProducts = result.rows;
+      } else if (buyCategoryIds.length > 0) {
+        const result = await query(
+          'SELECT id, name, price, images, category_id FROM products WHERE category_id = ANY($1) AND active = true',
+          [buyCategoryIds]
+        );
+        buyProducts = result.rows;
+      }
+
+      // Get products for the "get" (free items) condition
+      let getProducts = [];
+      if (getProductIds.length > 0) {
+        const result = await query(
+          'SELECT id, name, price, images, category_id FROM products WHERE id = ANY($1) AND active = true',
+          [getProductIds]
+        );
+        getProducts = result.rows;
+      } else if (getCategoryIds.length > 0) {
+        const result = await query(
+          'SELECT id, name, price, images, category_id FROM products WHERE category_id = ANY($1) AND active = true',
+          [getCategoryIds]
+        );
+        getProducts = result.rows;
+      }
+
+      // Fall back to original product_ids/category_ids if no specific buy/get defined
+      if (buyProducts.length === 0 && getProducts.length === 0) {
+        buyProducts = qualifyingProducts;
+        getProducts = qualifyingProducts;
+      }
+
+      // Find qualifying "buy" items in cart
+      let buyCartItems = [];
       if (items && items.length > 0) {
-        if (qualifyingProducts.length > 0) {
-          // Only count items that match qualifying products
-          const qualifyingIds = qualifyingProducts.map(p => p.id);
-          qualifyingCartItems = items.filter(item => qualifyingIds.includes(item.id));
+        if (buyProducts.length > 0) {
+          const buyIds = buyProducts.map(p => p.id);
+          buyCartItems = items.filter(item => buyIds.includes(item.id));
         } else {
-          // All items qualify
-          qualifyingCartItems = items;
+          buyCartItems = items;
         }
       }
 
-      const qualifyingQty = qualifyingCartItems.reduce((sum, item) => sum + item.quantity, 0);
+      const buyCartQty = buyCartItems.reduce((sum, item) => sum + item.quantity, 0);
 
-      if (qualifyingQty < buyQty) {
-        // Not enough qualifying items
+      // Check if buy condition is met
+      if (buyCartQty < buyQty) {
         requiresMoreItems = true;
-        itemsNeeded = buyQty - qualifyingQty;
+        itemsNeeded = buyQty - buyCartQty;
+
+        // Get category names for better messaging
+        let buyCategoryNames = [];
+        if (buyCategoryIds.length > 0) {
+          const catResult = await query(
+            'SELECT name FROM categories WHERE id = ANY($1)',
+            [buyCategoryIds]
+          );
+          buyCategoryNames = catResult.rows.map(c => c.name);
+        }
+
         return res.json({
           valid: false,
-          error: `Add ${itemsNeeded} more qualifying item(s) to use this promo. You need ${buyQty} items to get ${getQty} free.`,
+          error: buyCategoryNames.length > 0
+            ? `Add ${itemsNeeded} more ${buyCategoryNames.join(' or ')} to qualify for ${getQty} free items!`
+            : `Add ${itemsNeeded} more qualifying item(s) to use this promo.`,
           special: {
             id: special.id,
             name: special.name,
@@ -203,43 +261,63 @@ router.post('/validate-code', asyncHandler(async (req, res) => {
             description: special.description,
             buyQuantity: buyQty,
             getQuantity: getQty,
+            buyCategoryIds,
+            getCategoryIds,
           },
-          qualifyingProducts,
+          buyProducts,
+          getProducts,
           requiresMoreItems: true,
           itemsNeeded,
         });
       }
 
-      // Calculate how many free items they get
-      const setsEarned = Math.floor(qualifyingQty / buyQty);
-      const freeQty = setsEarned * getQty;
+      // Buy condition is met! Calculate how many free items they get
+      const setsEarned = Math.floor(buyCartQty / buyQty);
+      const totalFreeQty = setsEarned * getQty;
 
-      // Find the cheapest qualifying product to give free
-      if (qualifyingProducts.length > 0) {
-        const cheapestProduct = qualifyingProducts.reduce((min, p) =>
-          parseFloat(p.price) < parseFloat(min.price) ? p : min
-        );
-        freeItems = [{
-          ...cheapestProduct,
-          quantity: freeQty,
-          isFree: true,
-        }];
-        discount = parseFloat(cheapestProduct.price) * freeQty;
-      } else if (qualifyingCartItems.length > 0) {
-        // Use cheapest item from cart
-        const cheapestCartItem = qualifyingCartItems.reduce((min, item) =>
-          parseFloat(item.price) < parseFloat(min.price) ? item : min
-        );
-        freeItems = [{
-          id: cheapestCartItem.id,
-          name: cheapestCartItem.name,
-          price: cheapestCartItem.price,
-          quantity: freeQty,
-          isFree: true,
-        }];
-        discount = parseFloat(cheapestCartItem.price) * freeQty;
+      // If user has selected their free items, validate and calculate discount
+      if (selectedFreeItems.length > 0) {
+        const getProductIds = getProducts.map(p => p.id);
+        const validSelections = selectedFreeItems.filter(item => getProductIds.includes(item.id));
+        const selectedQty = validSelections.reduce((sum, item) => sum + item.quantity, 0);
+
+        if (selectedQty <= totalFreeQty) {
+          // Calculate discount based on selected items
+          freeItems = validSelections.map(item => {
+            const product = getProducts.find(p => p.id === item.id);
+            return {
+              ...product,
+              quantity: item.quantity,
+              isFree: true,
+            };
+          });
+          discount = freeItems.reduce((sum, item) => sum + (parseFloat(item.price) * item.quantity), 0);
+        }
       }
-      break;
+
+      // Return with buyConditionMet flag so frontend knows to show the selection modal
+      return res.json({
+        valid: true,
+        buyConditionMet: true,
+        special: {
+          id: special.id,
+          name: special.name,
+          code: special.code,
+          type: special.type,
+          description: special.description,
+          buyQuantity: buyQty,
+          getQuantity: getQty,
+          buyCategoryIds,
+          getCategoryIds,
+        },
+        buyProducts,
+        getProducts, // Available products for free item selection
+        totalFreeQty, // Total number of free items they can choose
+        freeItems, // Selected free items (if any)
+        discount,
+        selectedFreeItems: selectedFreeItems.length > 0 ? selectedFreeItems : null,
+        needsSelection: selectedFreeItems.length === 0, // True if user needs to select free items
+      });
 
     default:
       discount = 0;
