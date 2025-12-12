@@ -56,6 +56,15 @@ router.post('/create-session', asyncHandler(async (req, res) => {
   // Calculate delivery fee if applicable
   const deliveryFee = customerInfo?.orderType === 'delivery' ? 500 : 0; // 500 cents = $5.00
 
+  // Calculate subtotal for tax
+  const subtotalCents = items.reduce((sum, item) => {
+    return sum + Math.round(item.price * 100) * item.quantity;
+  }, 0);
+
+  // Calculate tax at 8.5%
+  const taxRate = 0.085;
+  const taxCents = Math.round(subtotalCents * taxRate);
+
   // Create line items for Stripe
   const lineItems = items.map((item) => ({
     price_data: {
@@ -71,6 +80,20 @@ router.post('/create-session', asyncHandler(async (req, res) => {
     },
     quantity: item.quantity,
   }));
+
+  // Add tax as a line item
+  if (taxCents > 0) {
+    lineItems.push({
+      price_data: {
+        currency: 'usd',
+        product_data: {
+          name: 'Sales Tax (8.5%)',
+        },
+        unit_amount: taxCents,
+      },
+      quantity: 1,
+    });
+  }
 
   // Add delivery fee as a line item if applicable
   if (deliveryFee > 0) {
@@ -205,11 +228,29 @@ router.post('/confirm-order', asyncHandler(async (req, res) => {
   const items = metadata.items ? JSON.parse(metadata.items) : [];
   const deliveryAddress = metadata.deliveryAddress ? JSON.parse(metadata.deliveryAddress) : null;
 
-  // Calculate totals from Stripe
-  const total = session.amount_total / 100; // Convert from cents
-  const taxRate = 0.085;
-  const subtotal = total / (1 + taxRate);
-  const tax = total - subtotal;
+  // Extract totals from Stripe line items
+  const stripeLineItems = session.line_items?.data || [];
+  let subtotalCents = 0;
+  let taxCents = 0;
+  let deliveryFeeCents = 0;
+
+  for (const lineItem of stripeLineItems) {
+    const amount = lineItem.amount_total || 0;
+    const name = lineItem.description || '';
+
+    if (name.includes('Sales Tax')) {
+      taxCents = amount;
+    } else if (name.includes('Delivery Fee')) {
+      deliveryFeeCents = amount;
+    } else {
+      subtotalCents += amount;
+    }
+  }
+
+  // Convert from cents to dollars
+  const subtotal = subtotalCents / 100;
+  const tax = taxCents / 100;
+  const total = session.amount_total / 100;
 
   // Determine customer ID - prefer the one passed in (authenticated user), fallback to metadata
   const orderCustomerId = customerId || (metadata.customerId ? parseInt(metadata.customerId) : null);
