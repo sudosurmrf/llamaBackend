@@ -9,9 +9,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // Parse CORS origins (supports comma-separated list)
-const allowedOrigins = process.env.FRONTEND_URL
-  ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
-  : ['http://localhost:5173'];
+const allowedOrigins = ['https://llamatreatsbakery.com','http://localhost:5173','https://llamatreats.com'];
 
 // CORS configuration
 const corsOptions = {

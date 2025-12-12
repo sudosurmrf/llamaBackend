@@ -1,11 +1,19 @@
 import express from 'express';
 import Stripe from 'stripe';
+import { query, getClient } from '../config/database.js';
 import { asyncHandler, AppError } from '../middleware/errorHandler.js';
 
 const router = express.Router();
 
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
+// Generate order number
+const generateOrderNumber = () => {
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `LT-${timestamp}-${random}`;
+};
 
 // Create Stripe Checkout Session
 router.post('/create-session', asyncHandler(async (req, res) => {
@@ -49,11 +57,23 @@ router.post('/create-session', asyncHandler(async (req, res) => {
   }
 
   // Build metadata for the order
+  // Note: Stripe metadata values have a 500 char limit, so we store items separately
   const orderMetadata = {
     orderType: customerInfo?.orderType || 'pickup',
     customerEmail: customerInfo?.email || '',
+    customerName: customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim(),
     customerPhone: customerInfo?.phone || '',
+    customerId: customerInfo?.customerId ? String(customerInfo.customerId) : '',
   };
+
+  // Store items as JSON (keeping it simple - product id, name, qty, price)
+  const itemsData = items.map(item => ({
+    id: item.id,
+    name: item.name,
+    quantity: item.quantity,
+    price: item.price,
+  }));
+  orderMetadata.items = JSON.stringify(itemsData);
 
   if (customerInfo?.orderType === 'pickup') {
     orderMetadata.pickupDate = customerInfo.pickupDate || '';
@@ -111,6 +131,130 @@ router.get('/session/:sessionId', asyncHandler(async (req, res) => {
       lineItems: session.line_items?.data,
     },
   });
+}));
+
+// Confirm order - creates order in database after successful Stripe payment
+router.post('/confirm-order', asyncHandler(async (req, res) => {
+  const { sessionId, customerId } = req.body;
+
+  if (!sessionId) {
+    throw new AppError('Session ID is required', 400);
+  }
+
+  // Check if order already exists for this session
+  const existingOrder = await query(
+    'SELECT id, order_number FROM orders WHERE stripe_session_id = $1',
+    [sessionId]
+  );
+
+  if (existingOrder.rows.length > 0) {
+    // Order already created, return it
+    return res.json({
+      message: 'Order already exists',
+      order: {
+        id: existingOrder.rows[0].id,
+        orderNumber: existingOrder.rows[0].order_number,
+      },
+    });
+  }
+
+  // Retrieve session from Stripe
+  const session = await stripe.checkout.sessions.retrieve(sessionId, {
+    expand: ['line_items', 'payment_intent'],
+  });
+
+  // Verify payment was successful
+  if (session.payment_status !== 'paid') {
+    throw new AppError('Payment not completed', 400);
+  }
+
+  // Parse metadata
+  const metadata = session.metadata || {};
+  const items = metadata.items ? JSON.parse(metadata.items) : [];
+  const deliveryAddress = metadata.deliveryAddress ? JSON.parse(metadata.deliveryAddress) : null;
+
+  // Calculate totals from Stripe
+  const total = session.amount_total / 100; // Convert from cents
+  const taxRate = 0.085;
+  const subtotal = total / (1 + taxRate);
+  const tax = total - subtotal;
+
+  // Determine customer ID - prefer the one passed in (authenticated user), fallback to metadata
+  const orderCustomerId = customerId || (metadata.customerId ? parseInt(metadata.customerId) : null);
+
+  // Parse pickup time if available
+  let pickupTime = null;
+  if (metadata.pickupDate && metadata.pickupTime) {
+    pickupTime = new Date(`${metadata.pickupDate}T${metadata.pickupTime}`);
+  }
+
+  const client = await getClient();
+
+  try {
+    await client.query('BEGIN');
+
+    // Create order
+    const orderResult = await client.query(
+      `INSERT INTO orders (
+        customer_id, order_number, status, subtotal, tax, total,
+        fulfillment_type, pickup_time, delivery_address,
+        customer_name, customer_email, customer_phone,
+        stripe_session_id, stripe_payment_intent
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *`,
+      [
+        orderCustomerId,
+        generateOrderNumber(),
+        'confirmed',
+        subtotal.toFixed(2),
+        tax.toFixed(2),
+        total.toFixed(2),
+        metadata.orderType || 'pickup',
+        pickupTime,
+        deliveryAddress ? JSON.stringify(deliveryAddress) : null,
+        metadata.customerName || session.customer_email,
+        metadata.customerEmail || session.customer_email,
+        metadata.customerPhone || null,
+        sessionId,
+        session.payment_intent?.id || null,
+      ]
+    );
+
+    const order = orderResult.rows[0];
+
+    // Insert order items
+    for (const item of items) {
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price, total_price)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          order.id,
+          item.id || null,
+          item.name,
+          item.quantity,
+          parseFloat(item.price).toFixed(2),
+          (parseFloat(item.price) * item.quantity).toFixed(2),
+        ]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    res.status(201).json({
+      message: 'Order created successfully',
+      order: {
+        id: order.id,
+        orderNumber: order.order_number,
+        status: order.status,
+        total: parseFloat(order.total),
+      },
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }));
 
 // Stripe Webhook to handle events
