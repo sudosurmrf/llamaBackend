@@ -62,7 +62,10 @@ export const authenticateCustomer = async (req, res, next) => {
 
 // Register a new customer (public)
 router.post('/register', asyncHandler(async (req, res) => {
-  const { email, password, firstName, lastName, phone } = req.body;
+  const { email, password, phone } = req.body;
+  // Handle both snake_case and camelCase from frontend
+  const firstName = req.body.first_name || req.body.firstName;
+  const lastName = req.body.last_name || req.body.lastName;
 
   if (!email || !password || !firstName || !lastName) {
     throw new AppError('Email, password, first name, and last name are required', 400);
@@ -176,7 +179,10 @@ router.get('/me', authenticateCustomer, asyncHandler(async (req, res) => {
 
 // Update customer profile
 router.put('/me', authenticateCustomer, asyncHandler(async (req, res) => {
-  const { firstName, lastName, phone, email } = req.body;
+  // Handle both snake_case and camelCase from frontend
+  const firstName = req.body.first_name || req.body.firstName;
+  const lastName = req.body.last_name || req.body.lastName;
+  const { phone, email } = req.body;
   const updates = [];
   const values = [];
   let paramCount = 1;
@@ -245,7 +251,9 @@ router.put('/me', authenticateCustomer, asyncHandler(async (req, res) => {
 
 // Change password
 router.put('/change-password', authenticateCustomer, asyncHandler(async (req, res) => {
-  const { currentPassword, newPassword } = req.body;
+  // Handle both snake_case and camelCase from frontend
+  const currentPassword = req.body.current_password || req.body.currentPassword;
+  const newPassword = req.body.new_password || req.body.newPassword;
 
   if (!currentPassword || !newPassword) {
     throw new AppError('Current password and new password are required', 400);

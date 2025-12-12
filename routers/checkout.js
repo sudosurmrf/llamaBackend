@@ -8,6 +8,15 @@ const router = express.Router();
 // Initialize Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+// Ensure FRONTEND_URL has a scheme
+const getFrontendUrl = () => {
+  let url = process.env.FRONTEND_URL || 'http://localhost:5173';
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = `https://${url}`;
+  }
+  return url.replace(/\/$/, ''); // Remove trailing slash
+};
+
 // Generate order number
 const generateOrderNumber = () => {
   const timestamp = Date.now().toString(36).toUpperCase();
@@ -17,7 +26,28 @@ const generateOrderNumber = () => {
 
 // Create Stripe Checkout Session
 router.post('/create-session', asyncHandler(async (req, res) => {
-  const { items, customerInfo } = req.body;
+  const { items } = req.body;
+  // Handle both snake_case and camelCase from frontend
+  const rawCustomerInfo = req.body.customer_info || req.body.customerInfo || {};
+
+  // Normalize customer info to handle both naming conventions
+  const customerInfo = {
+    email: rawCustomerInfo.email,
+    phone: rawCustomerInfo.phone,
+    orderType: rawCustomerInfo.order_type || rawCustomerInfo.orderType,
+    customerId: rawCustomerInfo.customer_id || rawCustomerInfo.customerId,
+    firstName: rawCustomerInfo.first_name || rawCustomerInfo.firstName,
+    lastName: rawCustomerInfo.last_name || rawCustomerInfo.lastName,
+    name: rawCustomerInfo.name,
+    pickupDate: rawCustomerInfo.pickup_date || rawCustomerInfo.pickupDate,
+    pickupTime: rawCustomerInfo.pickup_time || rawCustomerInfo.pickupTime,
+    address: rawCustomerInfo.address,
+    apartment: rawCustomerInfo.apartment,
+    city: rawCustomerInfo.city,
+    state: rawCustomerInfo.state,
+    zipCode: rawCustomerInfo.zip_code || rawCustomerInfo.zipCode,
+    deliveryInstructions: rawCustomerInfo.delivery_instructions || rawCustomerInfo.deliveryInstructions,
+  };
 
   if (!items || items.length === 0) {
     throw new AppError('No items in cart', 400);
@@ -96,8 +126,8 @@ router.post('/create-session', asyncHandler(async (req, res) => {
     payment_method_types: ['card'],
     line_items: lineItems,
     mode: 'payment',
-    success_url: `${process.env.FRONTEND_URL}/order-confirmation?success=true&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${process.env.FRONTEND_URL}/order-confirmation?canceled=true`,
+    success_url: `${getFrontendUrl()}/order-confirmation?success=true&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${getFrontendUrl()}/order-confirmation?canceled=true`,
     customer_email: customerInfo?.email,
     metadata: orderMetadata,
     automatic_tax: {
@@ -135,7 +165,9 @@ router.get('/session/:sessionId', asyncHandler(async (req, res) => {
 
 // Confirm order - creates order in database after successful Stripe payment
 router.post('/confirm-order', asyncHandler(async (req, res) => {
-  const { sessionId, customerId } = req.body;
+  // Handle both snake_case and camelCase from frontend
+  const sessionId = req.body.session_id || req.body.sessionId;
+  const customerId = req.body.customer_id || req.body.customerId;
 
   if (!sessionId) {
     throw new AppError('Session ID is required', 400);
