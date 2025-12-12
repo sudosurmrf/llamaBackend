@@ -131,8 +131,27 @@ router.post('/validate-code', asyncHandler(async (req, res) => {
     });
   }
 
+  // Get qualifying products if product_ids or category_ids are set
+  let qualifyingProducts = [];
+  if (special.product_ids && special.product_ids.length > 0) {
+    const productsResult = await query(
+      'SELECT id, name, price, images FROM products WHERE id = ANY($1) AND active = true',
+      [special.product_ids]
+    );
+    qualifyingProducts = productsResult.rows;
+  } else if (special.category_ids && special.category_ids.length > 0) {
+    const productsResult = await query(
+      'SELECT id, name, price, images, category_id FROM products WHERE category_id = ANY($1) AND active = true',
+      [special.category_ids]
+    );
+    qualifyingProducts = productsResult.rows;
+  }
+
   // Calculate discount based on type
   let discount = 0;
+  let freeItems = [];
+  let requiresMoreItems = false;
+  let itemsNeeded = 0;
 
   switch (special.type) {
     case 'discount_percentage':
@@ -151,17 +170,74 @@ router.post('/validate-code', asyncHandler(async (req, res) => {
       break;
 
     case 'buy_x_get_y':
-      // Complex logic would go here - for now, just apply as percentage
       const buyQty = special.value?.buy_quantity || special.value?.buyQuantity || 2;
       const getQty = special.value?.get_quantity || special.value?.getQuantity || 1;
-      // Simplified: give getQty items free worth based on average item price
+
+      // Find qualifying items in cart
+      let qualifyingCartItems = [];
       if (items && items.length > 0) {
-        const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);
-        if (totalItems >= buyQty) {
-          const avgPrice = subtotal / totalItems;
-          const freeItems = Math.floor(totalItems / (buyQty + getQty)) * getQty;
-          discount = avgPrice * freeItems;
+        if (qualifyingProducts.length > 0) {
+          // Only count items that match qualifying products
+          const qualifyingIds = qualifyingProducts.map(p => p.id);
+          qualifyingCartItems = items.filter(item => qualifyingIds.includes(item.id));
+        } else {
+          // All items qualify
+          qualifyingCartItems = items;
         }
+      }
+
+      const qualifyingQty = qualifyingCartItems.reduce((sum, item) => sum + item.quantity, 0);
+
+      if (qualifyingQty < buyQty) {
+        // Not enough qualifying items
+        requiresMoreItems = true;
+        itemsNeeded = buyQty - qualifyingQty;
+        return res.json({
+          valid: false,
+          error: `Add ${itemsNeeded} more qualifying item(s) to use this promo. You need ${buyQty} items to get ${getQty} free.`,
+          special: {
+            id: special.id,
+            name: special.name,
+            code: special.code,
+            type: special.type,
+            description: special.description,
+            buyQuantity: buyQty,
+            getQuantity: getQty,
+          },
+          qualifyingProducts,
+          requiresMoreItems: true,
+          itemsNeeded,
+        });
+      }
+
+      // Calculate how many free items they get
+      const setsEarned = Math.floor(qualifyingQty / buyQty);
+      const freeQty = setsEarned * getQty;
+
+      // Find the cheapest qualifying product to give free
+      if (qualifyingProducts.length > 0) {
+        const cheapestProduct = qualifyingProducts.reduce((min, p) =>
+          parseFloat(p.price) < parseFloat(min.price) ? p : min
+        );
+        freeItems = [{
+          ...cheapestProduct,
+          quantity: freeQty,
+          isFree: true,
+        }];
+        discount = parseFloat(cheapestProduct.price) * freeQty;
+      } else if (qualifyingCartItems.length > 0) {
+        // Use cheapest item from cart
+        const cheapestCartItem = qualifyingCartItems.reduce((min, item) =>
+          parseFloat(item.price) < parseFloat(min.price) ? item : min
+        );
+        freeItems = [{
+          id: cheapestCartItem.id,
+          name: cheapestCartItem.name,
+          price: cheapestCartItem.price,
+          quantity: freeQty,
+          isFree: true,
+        }];
+        discount = parseFloat(cheapestCartItem.price) * freeQty;
       }
       break;
 
@@ -180,8 +256,12 @@ router.post('/validate-code', asyncHandler(async (req, res) => {
       code: special.code,
       type: special.type,
       description: special.description,
+      buyQuantity: special.value?.buy_quantity || special.value?.buyQuantity,
+      getQuantity: special.value?.get_quantity || special.value?.getQuantity,
     },
     discount,
+    freeItems,
+    qualifyingProducts,
   });
 }));
 
