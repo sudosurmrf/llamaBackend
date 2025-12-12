@@ -1,17 +1,24 @@
 {
-  "name": "llamabackend",
+  "name": "llama-bakery-api",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node --env-file=.env server.js",
-    "seed:schema": "psql -d llama_bakery -f ./config/schema.sql"
+  "description": "Backend API for Llama Treats Bakery",
+  "main": "server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
   },
-  "keywords": [],
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --env-file=.env --watch server.js",
+    "build": "echo 'No build step required'",
+    "seed": "node config/seed.js",
+    "seed:schema": "psql -d llama_bakery -f ./config/schema.sql",
+    "db:reset": "psql -d llama_bakery -f ./config/schema.sql && node config/seed.js",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "keywords": ["bakery", "api", "express", "postgresql"],
   "author": "",
   "license": "ISC",
-  "type": "module",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.948.0",
     "@aws-sdk/s3-request-presigner": "^3.948.0",
@@ -22,6 +29,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
     "pg": "^8.16.3",
+    "stripe": "^20.0.0",
     "uuid": "^13.0.0"
   }
 }

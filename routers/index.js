@@ -7,6 +7,7 @@ import promotionsRouter from './promotions.js';
 import bannersRouter from './banners.js';
 import settingsRouter from './settings.js';
 import uploadRouter from './upload.js';
+import checkoutRouter from './checkout.js';
 
 const router = express.Router();
 
@@ -23,5 +24,8 @@ router.use('/settings', settingsRouter);
 
 // Upload routes
 router.use('/upload', uploadRouter);
+
+// Checkout routes
+router.use('/checkout', checkoutRouter);
 
 export default router;

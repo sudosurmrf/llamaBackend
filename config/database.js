@@ -1,15 +1,25 @@
 import pg from 'pg';
 const { Pool } = pg;
 
+// Support both DATABASE_URL (Railway/Heroku) and individual env vars
+const connectionConfig = process.env.DATABASE_URL
+  ? {
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    }
+  : {
+      host: process.env.DB_HOST || 'localhost',
+      port: process.env.DB_PORT || 5432,
+      database: process.env.DB_NAME || 'llama_bakery',
+      user: process.env.DB_USER || 'postgres',
+      password: process.env.DB_PASSWORD || '',
+    };
+
 const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'llama_bakery',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || '',
+  ...connectionConfig,
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 5000,
 });
 
 // Test the connection
@@ -19,7 +29,10 @@ pool.on('connect', () => {
 
 pool.on('error', (err) => {
   console.error('Unexpected error on idle client', err);
-  process.exit(-1);
+  // Don't exit in production, let the health check handle it
+  if (process.env.NODE_ENV !== 'production') {
+    process.exit(-1);
+  }
 });
 
 // Helper function to run queries
@@ -42,6 +55,16 @@ export const query = async (text, params) => {
 export const getClient = async () => {
   const client = await pool.connect();
   return client;
+};
+
+// Test database connection
+export const testConnection = async () => {
+  try {
+    const result = await query('SELECT NOW()');
+    return { connected: true, timestamp: result.rows[0].now };
+  } catch (error) {
+    return { connected: false, error: error.message };
+  }
 };
 
 export default pool;

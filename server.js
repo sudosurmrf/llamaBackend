@@ -3,13 +3,29 @@ import express from 'express';
 import cors from 'cors';
 import routers from './routers/index.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { testConnection } from './config/database.js';
 
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Parse CORS origins (supports comma-separated list)
+const allowedOrigins = process.env.FRONTEND_URL
+  ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
+  : ['http://localhost:5173'];
+
 // CORS configuration
 const corsOptions = {
-  origin: [process.env.FRONTEND_URL || 'http://localhost:5173'],
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`CORS blocked origin: ${origin}`);
+      callback(null, false);
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -28,21 +44,31 @@ if (process.env.NODE_ENV === 'development') {
   });
 }
 
-// Health check endpoint
+// Root endpoint
 app.get('/', (req, res) => {
   res.json({
-    message: 'Welcome to Llama Treats Bakery API!',
+    name: 'Llama Treats Bakery API',
     version: '1.0.0',
     status: 'running',
+    documentation: '/api/health',
   });
 });
 
-// API health check
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'healthy',
+// Health check endpoint (used by Railway for health checks)
+app.get('/api/health', async (req, res) => {
+  const dbStatus = await testConnection();
+
+  const health = {
+    status: dbStatus.connected ? 'healthy' : 'degraded',
     timestamp: new Date().toISOString(),
-  });
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development',
+    database: dbStatus.connected ? 'connected' : 'disconnected',
+  };
+
+  // Return 503 if database is down (helps with Railway health checks)
+  const statusCode = dbStatus.connected ? 200 : 503;
+  res.status(statusCode).json(health);
 });
 
 // API routes
@@ -55,14 +81,15 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // Start server
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
   console.log(`
 ╔═══════════════════════════════════════════════════╗
 ║                                                   ║
-║   🦙 Llama Treats Bakery API Server              ║
+║   🦙 Llama Treats Bakery API Server               ║
 ║                                                   ║
-║   Running on: http://localhost:${port}              ║
-║   Environment: ${process.env.NODE_ENV || 'development'}                    ║
+║   Port: ${port}                                       ║
+║   Environment: ${(process.env.NODE_ENV || 'development').padEnd(16)}          ║
+║   Health: /api/health                             ║
 ║                                                   ║
 ╚═══════════════════════════════════════════════════╝
   `);
