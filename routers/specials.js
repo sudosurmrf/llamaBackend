@@ -96,9 +96,9 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
   res.json({ special });
 }));
 
-// Validate promo code
+// Validate promo code and calculate discount
 router.post('/validate-code', asyncHandler(async (req, res) => {
-  const { code } = req.body;
+  const { code, subtotal, items } = req.body;
 
   if (!code) {
     throw new AppError('Promo code is required', 400);
@@ -115,12 +115,73 @@ router.post('/validate-code', asyncHandler(async (req, res) => {
   );
 
   if (result.rows.length === 0) {
-    throw new AppError('Invalid or expired promo code', 400);
+    return res.status(400).json({
+      valid: false,
+      error: 'Invalid or expired promo code',
+    });
   }
+
+  const special = result.rows[0];
+
+  // Check minimum purchase requirement
+  if (special.min_purchase && subtotal < special.min_purchase) {
+    return res.status(400).json({
+      valid: false,
+      error: `Minimum purchase of $${special.min_purchase.toFixed(2)} required`,
+    });
+  }
+
+  // Calculate discount based on type
+  let discount = 0;
+
+  switch (special.type) {
+    case 'discount_percentage':
+      // value is the percentage (e.g., 10 for 10% off)
+      discount = (subtotal * special.value) / 100;
+      break;
+
+    case 'fixed_price':
+      // value is the fixed discount amount
+      discount = Math.min(special.value, subtotal);
+      break;
+
+    case 'bundle_discount':
+      // value is the discount percentage for bundle
+      discount = (subtotal * special.value) / 100;
+      break;
+
+    case 'buy_x_get_y':
+      // Complex logic would go here - for now, just apply as percentage
+      const buyQty = special.value?.buy_quantity || special.value?.buyQuantity || 2;
+      const getQty = special.value?.get_quantity || special.value?.getQuantity || 1;
+      // Simplified: give getQty items free worth based on average item price
+      if (items && items.length > 0) {
+        const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);
+        if (totalItems >= buyQty) {
+          const avgPrice = subtotal / totalItems;
+          const freeItems = Math.floor(totalItems / (buyQty + getQty)) * getQty;
+          discount = avgPrice * freeItems;
+        }
+      }
+      break;
+
+    default:
+      discount = 0;
+  }
+
+  // Round to 2 decimal places
+  discount = Math.round(discount * 100) / 100;
 
   res.json({
     valid: true,
-    special: result.rows[0],
+    special: {
+      id: special.id,
+      name: special.name,
+      code: special.code,
+      type: special.type,
+      description: special.description,
+    },
+    discount,
   });
 }));
 

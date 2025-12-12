@@ -29,6 +29,8 @@ router.post('/create-session', asyncHandler(async (req, res) => {
   const { items } = req.body;
   // Handle both snake_case and camelCase from frontend
   const rawCustomerInfo = req.body.customer_info || req.body.customerInfo || {};
+  const promoCode = req.body.promo_code || req.body.promoCode || null;
+  const discountAmount = req.body.discount || 0;
 
   // Normalize customer info to handle both naming conventions
   const customerInfo = {
@@ -56,14 +58,18 @@ router.post('/create-session', asyncHandler(async (req, res) => {
   // Calculate delivery fee if applicable
   const deliveryFee = customerInfo?.orderType === 'delivery' ? 500 : 0; // 500 cents = $5.00
 
-  // Calculate subtotal for tax
+  // Calculate subtotal for tax (before discount)
   const subtotalCents = items.reduce((sum, item) => {
     return sum + Math.round(item.price * 100) * item.quantity;
   }, 0);
 
-  // Calculate tax at 8.5%
+  // Convert discount to cents
+  const discountCents = Math.round(discountAmount * 100);
+
+  // Calculate tax at 8.5% (on subtotal after discount)
   const taxRate = 0.085;
-  const taxCents = Math.round(subtotalCents * taxRate);
+  const taxableAmount = subtotalCents - discountCents;
+  const taxCents = Math.round(taxableAmount * taxRate);
 
   // Create line items for Stripe
   const lineItems = items.map((item) => ({
@@ -109,6 +115,24 @@ router.post('/create-session', asyncHandler(async (req, res) => {
     });
   }
 
+  // Create a coupon for the discount if applicable
+  let couponId = null;
+  if (discountCents > 0 && promoCode) {
+    try {
+      const coupon = await stripe.coupons.create({
+        amount_off: discountCents,
+        currency: 'usd',
+        name: `Promo: ${promoCode}`,
+        max_redemptions: 1,
+        redeem_by: Math.floor(Date.now() / 1000) + 3600, // Expires in 1 hour
+      });
+      couponId = coupon.id;
+    } catch (err) {
+      console.error('Failed to create coupon:', err);
+      // Continue without discount if coupon creation fails
+    }
+  }
+
   // Build metadata for the order
   // Note: Stripe metadata values have a 500 char limit, so we store items separately
   const orderMetadata = {
@@ -117,6 +141,8 @@ router.post('/create-session', asyncHandler(async (req, res) => {
     customerName: customerInfo?.name || `${customerInfo?.firstName || ''} ${customerInfo?.lastName || ''}`.trim(),
     customerPhone: customerInfo?.phone || '',
     customerId: customerInfo?.customerId ? String(customerInfo.customerId) : '',
+    promoCode: promoCode || '',
+    discount: discountAmount.toString(),
   };
 
   // Store items as JSON (keeping it simple - product id, name, qty, price)
@@ -145,7 +171,7 @@ router.post('/create-session', asyncHandler(async (req, res) => {
   }
 
   // Create Checkout Session
-  const session = await stripe.checkout.sessions.create({
+  const sessionConfig = {
     payment_method_types: ['card'],
     line_items: lineItems,
     mode: 'payment',
@@ -154,11 +180,16 @@ router.post('/create-session', asyncHandler(async (req, res) => {
     customer_email: customerInfo?.email,
     metadata: orderMetadata,
     automatic_tax: {
-      enabled: false, // We're handling tax in the frontend
+      enabled: false, // We're handling tax manually
     },
-    // Add tax as a separate line item
-    // Note: Tax is calculated on frontend at 8.5%
-  });
+  };
+
+  // Add discount coupon if applicable
+  if (couponId) {
+    sessionConfig.discounts = [{ coupon: couponId }];
+  }
+
+  const session = await stripe.checkout.sessions.create(sessionConfig);
 
   res.json({
     url: session.url,
