@@ -370,34 +370,61 @@ const seedData = {
     },
   ],
 
-  specials: [
+  // Specials will be built dynamically after categories are seeded (to get category IDs)
+  specialsTemplate: [
     {
       name: 'Cookie Dozen Deal',
       description: 'Buy a dozen cookies and save 20%! Mix and match any flavors.',
       type: 'discount_percentage',
       value: 20,
       start_date: new Date().toISOString(),
-      end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days from now
+      end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
       active: true,
       code: 'DOZEN20',
+      category_slugs: ['cookies'], // Will be converted to category_ids
     },
     {
       name: 'Birthday Cake Bundle',
-      description: 'Get a free box of 6 cupcakes with any cake purchase over $40.',
+      description: 'Get $10 off when you buy any cake! Perfect for celebrations.',
       type: 'bundle_discount',
-      value: { freeItem: 'cupcakes', freeQuantity: 6, minPurchase: 40 },
+      value: 10,
+      min_purchase: 40,
       start_date: new Date().toISOString(),
-      end_date: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(), // 60 days from now
+      end_date: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000).toISOString(),
       active: true,
+      code: 'CAKEBUNDLE',
+      category_slugs: ['cakes'],
     },
     {
-      name: 'Morning Pastry Special',
-      description: 'Buy 2 pastries before 10am and get 1 free! Perfect for breakfast.',
+      name: 'Buy 1 Cake, Get 6 Cupcakes Free',
+      description: 'Purchase any cake and choose 6 cupcakes absolutely FREE!',
       type: 'buy_x_get_y',
-      value: { buyQuantity: 2, getQuantity: 1 },
+      value: {
+        buy_quantity: 1,
+        get_quantity: 6,
+        // buy_category_ids and get_category_ids will be populated dynamically
+      },
+      buy_category_slugs: ['cakes'],
+      get_category_slugs: ['cupcakes'],
       start_date: new Date().toISOString(),
-      end_date: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(), // 14 days from now
+      end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
       active: true,
+      code: 'CAKECUPCAKES',
+    },
+    {
+      name: 'Morning Pastry Deal',
+      description: 'Buy 2 pastries and get 1 free! Perfect for breakfast.',
+      type: 'buy_x_get_y',
+      value: {
+        buy_quantity: 2,
+        get_quantity: 1,
+      },
+      buy_category_slugs: ['pastries'],
+      get_category_slugs: ['pastries'],
+      start_date: new Date().toISOString(),
+      end_date: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+      active: true,
+      code: 'PASTRY21',
     },
   ],
 
@@ -566,24 +593,48 @@ async function seed() {
     }
     console.log('');
 
-    // Seed specials
+    // Seed specials (using categoryMap to resolve category slugs to IDs)
     console.log('Seeding specials...');
-    for (const special of seedData.specials) {
+    for (const template of seedData.specialsTemplate) {
+      // Convert category slugs to IDs
+      const categoryIds = (template.category_slugs || [])
+        .map(slug => categoryMap[slug])
+        .filter(Boolean);
+
+      // For buy_x_get_y, add category IDs to the value object
+      let value = template.value;
+      if (template.type === 'buy_x_get_y') {
+        const buyCategoryIds = (template.buy_category_slugs || [])
+          .map(slug => categoryMap[slug])
+          .filter(Boolean);
+        const getCategoryIds = (template.get_category_slugs || [])
+          .map(slug => categoryMap[slug])
+          .filter(Boolean);
+
+        value = {
+          ...template.value,
+          buy_category_ids: buyCategoryIds,
+          get_category_ids: getCategoryIds,
+        };
+      }
+
       await pool.query(
-        `INSERT INTO specials (name, description, type, value, start_date, end_date, active, code)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        `INSERT INTO specials (name, description, type, value, category_ids, start_date, end_date, active, min_purchase, code)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
-          special.name,
-          special.description,
-          special.type,
-          JSON.stringify(special.value),
-          special.start_date,
-          special.end_date,
-          special.active,
-          special.code || null,
+          template.name,
+          template.description,
+          template.type,
+          JSON.stringify(value),
+          categoryIds,
+          template.start_date,
+          template.end_date,
+          template.active,
+          template.min_purchase || null,
+          template.code,
         ]
       );
-      console.log(`  Created special: ${special.name}`);
+      console.log(`  Created special: ${template.name} (code: ${template.code})`);
     }
     console.log('');
 
@@ -653,6 +704,12 @@ async function seed() {
     console.log('Test credentials:');
     console.log('  Admin: admin@llamatreats.com / admin123');
     console.log('  Baker: baker@llamatreats.com / baker123');
+    console.log('');
+    console.log('Promo codes:');
+    console.log('  DOZEN20 - 20% off cookies');
+    console.log('  CAKEBUNDLE - $10 off cakes (min $40)');
+    console.log('  CAKECUPCAKES - Buy 1 cake, get 6 cupcakes free');
+    console.log('  PASTRY21 - Buy 2 pastries, get 1 free');
     console.log('');
 
   } catch (error) {
