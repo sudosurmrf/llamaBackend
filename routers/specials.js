@@ -364,6 +364,20 @@ router.post('/', authenticate, authorize('admin', 'staff'), uploadSingle, handle
     throw new AppError('Name, type, value, start_date, and end_date are required', 400);
   }
 
+  // Promo code is required for all specials
+  if (!code || !code.trim()) {
+    throw new AppError('Promo code is required', 400);
+  }
+
+  // Check if promo code is unique
+  const existingCode = await query(
+    'SELECT id FROM specials WHERE UPPER(code) = $1',
+    [code.toUpperCase()]
+  );
+  if (existingCode.rows.length > 0) {
+    throw new AppError('This promo code is already in use. Please choose a different code.', 400);
+  }
+
   const validTypes = ['discount_percentage', 'bundle_discount', 'buy_x_get_y', 'fixed_price'];
   if (!validTypes.includes(type)) {
     throw new AppError('Invalid special type', 400);
@@ -514,8 +528,22 @@ router.put('/:id', authenticate, authorize('admin', 'staff'), uploadSingle, hand
   }
 
   if (code !== undefined) {
+    // Code cannot be removed (it's required)
+    if (!code || !code.trim()) {
+      throw new AppError('Promo code is required and cannot be removed', 400);
+    }
+
+    // Check if new code is unique (excluding current special)
+    const existingCode = await query(
+      'SELECT id FROM specials WHERE UPPER(code) = $1 AND id != $2',
+      [code.toUpperCase(), id]
+    );
+    if (existingCode.rows.length > 0) {
+      throw new AppError('This promo code is already in use. Please choose a different code.', 400);
+    }
+
     updates.push(`code = $${paramCount}`);
-    values.push(code ? code.toUpperCase() : null);
+    values.push(code.toUpperCase());
     paramCount++;
   }
 
