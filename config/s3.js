@@ -55,14 +55,47 @@ export const getSignedUrlForFile = async (key, expiresIn = 3600) => {
   return url;
 };
 
-// Extract key from S3 URL
+// Extract key from S3 URL or custom domain URL
 export const extractKeyFromUrl = (url) => {
   if (!url) return null;
+
   try {
-    const urlObj = new URL(url);
-    // Remove leading slash
-    return urlObj.pathname.substring(1);
-  } catch {
+    // Clean up the URL (remove whitespace/newlines)
+    const cleanUrl = url.trim();
+
+    const urlObj = new URL(cleanUrl);
+
+    // Check if it's a standard S3 URL (bucket.s3.region.amazonaws.com)
+    if (urlObj.hostname.includes('.s3.') && urlObj.hostname.includes('.amazonaws.com')) {
+      // Standard S3 URL format: https://bucket.s3.region.amazonaws.com/key
+      return urlObj.pathname.substring(1); // Remove leading slash
+    }
+
+    // Check if it's an S3 path-style URL (s3.region.amazonaws.com/bucket)
+    if (urlObj.hostname.startsWith('s3.') && urlObj.hostname.includes('.amazonaws.com')) {
+      // Path-style: https://s3.region.amazonaws.com/bucket/key
+      const parts = urlObj.pathname.substring(1).split('/');
+      if (parts.length > 1) {
+        return parts.slice(1).join('/'); // Remove bucket name, return rest as key
+      }
+    }
+
+    // For custom domain (CloudFront or custom domain pointing to S3)
+    // The pathname after the leading slash IS the S3 key
+    const pathname = urlObj.pathname.substring(1);
+
+    // Validate it looks like an S3 key (should contain folder structure or valid filename)
+    // S3 keys typically have format: folder/timestamp-filename.ext
+    if (pathname && (pathname.includes('/') || pathname.match(/^\d+-.*\.\w+$/))) {
+      return pathname;
+    }
+
+    // If it's just a UUID or similar (like 0a8ddcde-1958-4d58-8aab-412b973f1032)
+    // This is likely NOT a valid S3 key we created, skip deletion
+    console.warn(`URL does not appear to be an S3 key we created: ${cleanUrl}`);
+    return null;
+  } catch (err) {
+    console.error('Failed to parse URL for S3 key extraction:', url, err);
     return null;
   }
 };
